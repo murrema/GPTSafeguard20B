@@ -1,95 +1,97 @@
 from flask import Flask, request, jsonify
-import os, requests, html, logging
+import requests
+import os
 
 app = Flask(__name__)
 
-# === CONFIGURAÇÃO DA SUA CHAVE ===
+# Pega variáveis de ambiente
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL = os.getenv("MODEL", "openai/gpt-oss-safeguard-20b")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("gptsafeguard20b")
-
-# === ROTA GET (Render Health Check) ===
 @app.route("/", methods=["GET"])
 def home():
     return "🔥 GPTSafeguard20B ativo e pronto para a Alexa."
 
-# === ROTA POST (Alexa -> Flask -> OpenRouter) ===
 @app.route("/", methods=["POST"])
-def alexa_handler():
+def alexa_skill():
     try:
-        req = request.get_json(force=True)
-        logger.info(f"Requisição recebida: {req}")
+        data = request.get_json()
+        print("📩 Requisição recebida da Alexa:")
+        print(data)
 
-        # Captura o que o usuário disse
-        intent = req.get("request", {}).get("intent", {})
-        slots = intent.get("slots", {})
-        user_input = ""
-
-        if "query" in slots and slots["query"].get("value"):
-            user_input = slots["query"]["value"]
+        # Identifica o tipo de requisição
+        req_type = data.get("request", {}).get("type", "")
+        if req_type == "LaunchRequest":
+            response_text = "Modo Insano ativado! O que deseja saber?"
+        elif req_type == "IntentRequest":
+            intent_name = data["request"]["intent"]["name"]
+            query = data["request"]["intent"]["slots"].get("query", {}).get("value", "")
+            if not query:
+                response_text = f"Você pediu o intent {intent_name}, mas sem uma pergunta."
+            else:
+                response_text = chamar_openrouter(query)
         else:
-            for s in slots.values():
-                if s.get("value"):
-                    user_input = s["value"]
-                    break
+            response_text = "Não entendi o tipo de requisição."
 
-        if not user_input:
-            return alexa_say("Desculpe, não entendi. Pode repetir sua pergunta?")
+        return jsonify(
+            {
+                "version": "1.0",
+                "response": {
+                    "outputSpeech": {
+                        "type": "PlainText",
+                        "text": response_text
+                    },
+                    "shouldEndSession": False
+                }
+            }
+        )
 
-        # Envia a pergunta pro modelo da OpenRouter
-        payload = {
-            "model": MODEL,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Você é o GPT Safeguard 20B — uma IA avançada, "
-                        "adaptativa, detalhada e natural. Responda sempre em português do Brasil, "
-                        "com clareza e empatia. Seja preciso e explique se necessário."
-                    )
-                },
-                {"role": "user", "content": user_input}
-            ],
-            "max_tokens": 600,
-            "temperature": 0.8
-        }
+    except Exception as e:
+        print(f"❌ Erro interno: {str(e)}")
+        return jsonify(
+            {
+                "version": "1.0",
+                "response": {
+                    "outputSpeech": {
+                        "type": "PlainText",
+                        "text": "Houve um problema interno no servidor. Tente novamente."
+                    },
+                    "shouldEndSession": True
+                }
+            }
+        )
 
+def chamar_openrouter(pergunta):
+    try:
         headers = {
             "Authorization": f"Bearer {OPENROUTER_KEY}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://openrouter.ai",
+            "HTTP-Referer": "https://openrouter.ai/",
             "X-Title": "GPTSafeguard20B"
         }
 
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers, json=payload, timeout=30
-        )
-        data = response.json()
-        reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        payload = {
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": "Você é o modo insano, direto e poderoso."},
+                {"role": "user", "content": pergunta}
+            ]
+        }
 
-        if not reply:
-            reply = "O modelo não respondeu agora. Pode tentar novamente."
+        print(f"🚀 Enviando para OpenRouter: {payload}")
 
-        return alexa_say(reply)
+        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+        print("🔁 Status da resposta:", response.status_code)
+        print("📦 Corpo:", response.text)
+
+        if response.status_code == 200:
+            resposta = response.json()["choices"][0]["message"]["content"]
+            return resposta
+        else:
+            return f"Erro na OpenRouter: {response.status_code}"
 
     except Exception as e:
-        logger.exception("Erro geral no servidor:")
-        return alexa_say(f"Ocorreu um erro interno: {e}")
-
-# === Formata resposta para Alexa ===
-def alexa_say(text, end_session=False):
-    text = html.escape(text)
-    return jsonify({
-        "version": "1.0",
-        "response": {
-            "outputSpeech": {"type": "PlainText", "text": text},
-            "shouldEndSession": end_session
-        }
-    })
+        return f"Erro ao conectar ao OpenRouter: {str(e)}"
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
